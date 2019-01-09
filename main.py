@@ -50,7 +50,7 @@ def print_line(round, cur_sample, tot_samples, start_time, train_loss, train_acc
         sys.stdout.write("\n")
 
 
-class LNN:
+class Model:
     def __init__(self, input_dim, layers):
         #  tensers_sets contains the set of some kind of tensors
         self.tensers_sets = dict()
@@ -58,7 +58,7 @@ class LNN:
 
         #  define forwarding phase
         self.inputs = tf.placeholder(dtype=tf.int32, shape=[None, input_dim], name="inputs")  # batch * input_dim
-        cur_layer = self.inputs
+        cur_layer = tf.cast(self.inputs, dtype=tf.float32)
         for i in range(len(layers)):
             layer_type, layer_params = layers[i]
             with tf.variable_scope('layer_{}_{}'.format(i, layer_type)):
@@ -72,9 +72,12 @@ class LNN:
 
         #  define loss
         self.labels = tf.placeholder(dtype=tf.float32, shape=[None], name='labels')
-        self.negators_regu = tf.add_n([logic_regulation(v) for v in tf.get_collection('NEGATORS')])
-        self.selectors_regu = tf.add_n([logic_regulation(v) for v in tf.get_collection('SELECTORS')])
-        self.propositions_regu = tf.add_n([logic_regulation(v) for v in self.tensers_sets['propositions']])
+        negators_regu_list = [logic_regulation(v) for v in tf.get_collection('NEGATORS')]
+        selectors_regu_list = [logic_regulation(v) for v in tf.get_collection('SELECTORS')]
+        propositions_regu_list = [logic_regulation(v) for v in self.tensers_sets['propositions']]
+        self.negators_regu = tf.add_n(negators_regu_list) if len(negators_regu_list) != 0 else 0.0
+        self.selectors_regu = tf.add_n(selectors_regu_list) if len(selectors_regu_list) != 0 else 0.0
+        self.propositions_regu = tf.add_n(propositions_regu_list) if len(propositions_regu_list) != 0 else 0.0
 #        self.loss = tf.nn.sigmoid_cross_entropy_with_logits(labels=self.labels, logits=self.logits) + \
 #                    self.negators_regu + self.selectors_regu + self.propositions_regu
         self.loss = tf.nn.sigmoid_cross_entropy_with_logits(labels=self.labels, logits=self.logits)
@@ -102,7 +105,7 @@ class LNN:
     def dense_layer(self, input, units, activation='relu'):
         input_dim = input.shape.as_list()[-1]
         weights = tf.get_variable('weight', shape=[input_dim, units], dtype=tf.float32,
-                                  initializer=tf.initializers.glorot_normal(),
+                                  initializer=tf.keras.initializers.glorot_normal(),
                                   trainable=True, collections=['WEIGHTS', tf.GraphKeys.GLOBAL_VARIABLES])
         bias = tf.get_variable('bias', shape=[1, units], dtype=tf.float32,
                                initializer=tf.initializers.constant(0.0), trainable=True, collections=['BIAS', tf.GraphKeys.GLOBAL_VARIABLES])
@@ -114,25 +117,38 @@ class LNN:
             output = tf.matmul(input, weights) + bias
         return output
 
+def get_trainable_variable_number():
+    total_number_parameters = 0
+    for var in tf.trainable_variables():
+        number_parameters = 1
+        for dim in var.get_shape():
+            number_parameters *= dim.value
+        total_number_parameters += number_parameters
+    return total_number_parameters
 
-
-def train(batch_size=32, eval_per_steps=30, max_rounds=50, use_ratio=0.4, lr=0.001):
-    #  construct layers
-    layers = []
-    layers.append(('logic', {'units': 100}))
-    layers.append(('logic', {'units': 100}))
-    layers.append(('dense', {'units': 100, 'activation': 'relu'}))
-    layers.append(('dense', {'units': 1, 'activation': None}))
+def train(layers, batch_size=32, eval_per_steps=30, max_rounds=50, use_ratio=0.4, lr=0.001):
 
     #  read dataset
     dataset = as_dataset('LogicSyn', False)
     graph = tf.Graph()
     sess = tf.Session(graph=graph)
+    writer = tf.summary.FileWriter("statistics", graph=graph)
     with graph.as_default():
         learning_rate = tf.get_variable('lr', dtype=tf.float32, initializer=lr, trainable=False)
-        model = LNN(dataset.num_fields, layers)
+        model = Model(dataset.num_fields, layers)
         opt = tf.train.AdamOptimizer(learning_rate=learning_rate)
         train_op = opt.minimize(model.loss)
+        for var in tf.get_collection('NEGATORS'):
+            tf.summary.histogram(var.name, var)
+        for var in tf.get_collection('SELECTORS'):
+            tf.summary.histogram(var.name, var)
+        for var in tf.get_collection('WEIGHTS'):
+            tf.summary.histogram(var.name, var)
+        write_op = tf.summary.merge_all()
+
+
+
+    print("Number of trainable parameters: {}\n".format(get_trainable_variable_number()))
 
     #  load dataset
     X_train, y_train, X_valid, y_valid = get_data('LogicSyn', use_ratio=use_ratio, train_ratio=0.8)
@@ -149,6 +165,8 @@ def train(batch_size=32, eval_per_steps=30, max_rounds=50, use_ratio=0.4, lr=0.0
         for round in range(num_rounds):
             start_time = time.time()
             train_loss, train_acc, train_auc, valid_loss, valid_acc, valid_auc = 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+            summary = sess.run(fetches=write_op)
+            writer.add_summary(summary, round)
             for step in range(tot_steps):
                 inputs = X_train[step * batch_size: (step + 1) * batch_size]
                 labels = y_train[step * batch_size: (step + 1) * batch_size]
@@ -189,12 +207,21 @@ def plot_histories(histories, info):
     plt.savefig(filename, format='png')
     plt.show()
 
+#  construct layers
+layers = []
+layers.append(('logic', {'units': 300}))
+layers.append(('logic', {'units': 300}))
+#layers.append(('dense', {'units': 100, 'activation': 'relu'}))
+#layers.append(('dense', {'units': 100, 'activation': 'relu'}))
+layers.append(('dense', {'units': 300, 'activation': 'relu'}))
+layers.append(('dense', {'units': 1, 'activation': None}))
 batch_size = 32
 eval_per_steps = 30
-max_rounds = 10
+max_rounds = 100
 use_ratio = 1.0
 lr = 0.001
-history = train(batch_size=batch_size, eval_per_steps=eval_per_steps, max_rounds=max_rounds, use_ratio=use_ratio, lr=lr)
+
+history = train(layers=layers, batch_size=batch_size, eval_per_steps=eval_per_steps, max_rounds=max_rounds, use_ratio=use_ratio, lr=lr)
 print(history)
 plot_histories(history, 'batch_size={}_evalsteps={}_rounds={}_useratio={}'.format(batch_size, eval_per_steps, max_rounds, use_ratio))
 
