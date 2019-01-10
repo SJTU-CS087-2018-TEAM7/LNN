@@ -50,6 +50,12 @@ def print_line(round, cur_sample, tot_samples, start_time, train_loss, train_acc
         sys.stdout.write("\n")
 
 
+def auc_score(y_true, y_score):
+    if np.alltrue(y_true == 1) or np.alltrue(y_true == 0):
+        return 1.0
+    else:
+        return roc_auc_score(y_true, y_score)
+
 class Model:
     def __init__(self, input_dim, layers):
         #  tensers_sets contains the set of some kind of tensors
@@ -127,7 +133,6 @@ def get_trainable_variable_number():
     return total_number_parameters
 
 def train(layers, batch_size=32, eval_per_steps=30, max_rounds=50, use_ratio=0.4, lr=0.001):
-
     #  read dataset
     dataset = as_dataset('LogicSyn', False)
     graph = tf.Graph()
@@ -173,7 +178,7 @@ def train(layers, batch_size=32, eval_per_steps=30, max_rounds=50, use_ratio=0.4
                 _, logits, loss = sess.run((train_op, model.logits, model.loss), feed_dict={model.inputs: inputs, model.labels: labels})
                 preds = np.where(logits > 0, np.ones_like(logits, dtype=np.int32), np.zeros_like(logits, dtype=np.int32))
                 train_loss = (train_loss * step + np.mean(loss)) / (step + 1)
-                train_auc = (train_auc * step + roc_auc_score(labels, logits)) / (step + 1)
+                train_auc = (train_auc * step + auc_score(labels, logits)) / (step + 1)
                 train_acc = (train_acc * step + np.count_nonzero(labels == preds) / batch_size) / (step + 1)
 
                 if (step + 1) % eval_per_steps == 0 or step + 1 == tot_steps or step == 0:
@@ -182,7 +187,7 @@ def train(layers, batch_size=32, eval_per_steps=30, max_rounds=50, use_ratio=0.4
                     val_preds = np.where(val_logits > 0, np.ones_like(val_logits, dtype=np.int32), np.zeros_like(val_logits, dtype=np.int32))
                     valid_loss = np.mean(val_loss)
                     valid_acc = np.count_nonzero(val_labels == val_preds) / X_valid.shape[0]
-                    valid_auc = roc_auc_score(val_labels, val_logits)
+                    valid_auc = auc_score(val_labels, val_logits)
                 print_line(round, min((step + 1) * batch_size, tot_samples), tot_samples, start_time, train_loss, train_acc, train_auc, valid_loss, valid_acc, valid_auc)
             history['train_loss'].append(train_loss)
             history['train_acc'].append(train_acc)
@@ -206,6 +211,7 @@ def plot_histories(histories, info):
     plt.legend(legends, loc='upper left')
     plt.savefig(filename, format='png')
     plt.show()
+
 
 #  construct layers
 layers = []
