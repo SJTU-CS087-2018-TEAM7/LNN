@@ -6,11 +6,11 @@ import json
 #
 #  config parameters
 #
-samples = 10000         #  the number of samples to generate
+samples = 1000#10000         #  the number of samples to generate
 train_ratio = 0.8       #  sample * train_ratio samples will be in train.svm
-input_len = 100         #  the dimension of input
-disjunction_maxlen = 50 #  the maximum length of the disjunction
-disjunction_num = 40    #  the number of disjunctions in the disjunction
+input_len = 10#100         #  the dimension of input
+disjunction_maxlen = 3#50 #  the maximum length of the disjunction
+disjunction_num = 3#40    #  the number of disjunctions in the disjunction
 data_dir = os.path.dirname(os.path.abspath(__file__))
 
 def calculate(X, disjunctions):

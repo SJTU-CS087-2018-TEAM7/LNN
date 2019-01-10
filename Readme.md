@@ -2,9 +2,8 @@
 
 ## Steps to Start Training
 
-- run `./dataset/LogicSyn/gen_disjunctive_clauses.py` to generate synthetic dataset
+- run `python./dataset/LogicSyn/gen_disjunctive_clauses.py` to generate synthetic dataset
 - run `mkdir experiments` to create this directory
-- run `mkdir statistics` 
 - run main.py
 
 use `tensorboard --logdir statistics` to examine the histograms of selectors and negators
@@ -32,9 +31,9 @@ test set size: 2000
         positive ratio: 0.407
 ```
 
-- Fully LNN (4 Logic Layers):
-- Mixed LNN (2 Logic Layers + 2 Fully Connected Layers): 
-- Fully NN (4 Fully Connected Layers):
+- Fully LNN (4 Logic Layers): `train_loss:0.418 train_acc:0.897 train_auc:0.915 valid_loss:0.417 valid_acc:0.897 valid_auc:0.914`
+- Mixed LNN (2 Logic Layers + 2 Fully Connected Layers): `train_loss:0.060 train_acc:0.979 train_auc:0.997 valid_loss:0.075 valid_acc:0.980 valid_auc:0.991`
+- Fully NN (4 Fully Connected Layers): `train_loss:-0.000 train_acc:1.000 train_auc:1.000 valid_loss:0.694 valid_acc:0.933 valid_auc:0.972`
 
 ### Influence of Regularization
 
@@ -50,13 +49,17 @@ The statistics of dataset remains the same as previous.
 
 The statistics of dataset:
 
-<<<<<<< HEAD
 ```
 input_len = 10
 disjunction_maxlen = 3
 disjunction_num = 3
-```
-=======
-use `tensorboard --logdir statistics` to examine the histograms of selectors and negators
 
->>>>>>> 5634ca30857fd822ca927987215be98d9010029d
+train set: 800
+        positive samples: 431
+        negative samples: 369
+        positive ratio: 0.53875
+test size: 200
+        positive samples: 103
+        negative samples: 97
+        positive ratio: 0.515
+```

@@ -148,9 +148,9 @@ class Dataset:
         print('\tnegative samples:', self.test_neg_samples)
         print('\tpositive ratio:', self.test_pos_ratio)
         print('input max length = %d, number of categories = %d' % (self.max_length, self.num_features))
-        print('features\tmin_index\tsize')
-        for i in range(len(self.feat_names)):
-            print('%s\t%d\t%d' % (self.feat_names[i], self.feat_min[i], self.feat_sizes[i]))
+        # print('features\tmin_index\tsize')
+        # for i in range(len(self.feat_names)):
+        #     print('%s\t%d\t%d' % (self.feat_names[i], self.feat_min[i], self.feat_sizes[i]))
 
     def _files_iter_(self, gen_type='train', shuffle_block=False):
         """
