@@ -9,9 +9,9 @@ import sys
 
 def get_actionvation(activation):
     if activation == 'relu':
-        return tf.nn.relu;
+        return tf.nn.relu
     elif activation == 'softmax':
-        return tf.nn.softmax;
+        return tf.nn.softmax
     elif activation is None:
         return None
     else:
@@ -21,8 +21,14 @@ def get_actionvation(activation):
 def logic_regulation(x):
     return tf.reduce_sum(0.5 - tf.abs(0.5 - x))
 
+
+def weight_regulation(x):
+    return tf.nn.l2_loss(x)
+
+
 def range_constraint(x):
     return tf.maximum(0.0, tf.minimum(x, 1.0))
+
 
 def get_data(data_name, use_ratio, train_ratio):
     dataset = as_dataset(data_name, True)
@@ -40,6 +46,7 @@ def get_data(data_name, use_ratio, train_ratio):
     y_small_valid = y_train[num_small_train:num_small_train + num_small_valid]
     return X_small_train, y_small_train, X_small_valid, y_small_valid
 
+
 def print_line(round, cur_sample, tot_samples, start_time, train_loss, train_acc, train_auc, valid_loss, valid_acc, valid_auc):
     progress = "".join([('#' if i *  tot_samples < cur_sample * 30 else '=') for i in range(30)])
     status = "\r\tRound:{} {}/{} [{}] Elapsed: {:.3f} seconds, train_loss:{:.3f} train_acc:{:.3f} train_auc:{:.3f} valid_loss:{:.3f} valid_acc:{:.3f} valid_auc:{:.3f}".format(
@@ -56,8 +63,9 @@ def auc_score(y_true, y_score):
     else:
         return roc_auc_score(y_true, y_score)
 
+
 class Model:
-    def __init__(self, input_dim, layers):
+    def __init__(self, input_dim, layers, lambda_negate=0.001, lambda_selector=0.001, lambda_propositions=0.001, lambda_weights=0.001):
         #  tensers_sets contains the set of some kind of tensors
         self.tensers_sets = dict()
         self.tensers_sets['propositions'] = []
@@ -81,13 +89,14 @@ class Model:
         negators_regu_list = [logic_regulation(v) for v in tf.get_collection('NEGATORS')]
         selectors_regu_list = [logic_regulation(v) for v in tf.get_collection('SELECTORS')]
         propositions_regu_list = [logic_regulation(v) for v in self.tensers_sets['propositions']]
-        self.negators_regu = tf.add_n(negators_regu_list) if len(negators_regu_list) != 0 else 0.0
-        self.selectors_regu = tf.add_n(selectors_regu_list) if len(selectors_regu_list) != 0 else 0.0
-        self.propositions_regu = tf.add_n(propositions_regu_list) if len(propositions_regu_list) != 0 else 0.0
-#        self.loss = tf.nn.sigmoid_cross_entropy_with_logits(labels=self.labels, logits=self.logits) + \
-#                    self.negators_regu + self.selectors_regu + self.propositions_regu
-        self.loss = tf.nn.sigmoid_cross_entropy_with_logits(labels=self.labels, logits=self.logits)
+        weights_regu_list = [weight_regulation(v) for v in tf.get_collection('WEIGHTS')]
+        self.negators_regu = lambda_negate * tf.add_n(negators_regu_list) if len(negators_regu_list) != 0 else 0.0
+        self.selectors_regu = lambda_selector * tf.add_n(selectors_regu_list) if len(selectors_regu_list) != 0 else 0.0
+        self.propositions_regu = lambda_propositions * tf.add_n(propositions_regu_list) if len(propositions_regu_list) != 0 else 0.0
+        self.weights_regu = lambda_weights * tf.add_n(weights_regu_list) if len(weights_regu_list) != 0 else 0.0
+        self.regu_loss = self.negators_regu + self.selectors_regu + self.propositions_regu + self.weights_regu
 
+        self.loss = tf.nn.sigmoid_cross_entropy_with_logits(labels=self.labels, logits=self.logits) + self.regu_loss
 
     def logic_layer(self, input, units):  # input:  batch * input_dim
         input_dim = input.shape.as_list()[-1]
@@ -123,6 +132,7 @@ class Model:
             output = tf.matmul(input, weights) + bias
         return output
 
+
 def get_trainable_variable_number():
     total_number_parameters = 0
     for var in tf.trainable_variables():
@@ -131,6 +141,7 @@ def get_trainable_variable_number():
             number_parameters *= dim.value
         total_number_parameters += number_parameters
     return total_number_parameters
+
 
 def train(layers, batch_size=32, eval_per_steps=30, max_rounds=50, use_ratio=0.4, lr=0.001):
     #  read dataset
@@ -150,8 +161,6 @@ def train(layers, batch_size=32, eval_per_steps=30, max_rounds=50, use_ratio=0.4
         for var in tf.get_collection('WEIGHTS'):
             tf.summary.histogram(var.name, var)
         write_op = tf.summary.merge_all()
-
-
 
     print("Number of trainable parameters: {}\n".format(get_trainable_variable_number()))
 
@@ -211,7 +220,6 @@ def plot_histories(histories, info):
     plt.legend(legends, loc='upper left')
     plt.savefig(filename, format='png')
     plt.show()
-
 
 #  construct layers
 layers = []
