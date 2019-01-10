@@ -5,6 +5,9 @@ import argparse
 import matplotlib.pyplot as plt
 from dataset import as_dataset
 
+import os
+os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+
 import tensorflow as tf
 import numpy as np
 from sklearn.metrics import roc_auc_score
@@ -20,7 +23,8 @@ parser.add_argument('--max_rounds',     type=int,   default=100)
 parser.add_argument('--lr',             type=float, default=0.001)
 parser.add_argument('--patience',       type=int,   default=5)
 # data
-parser.add_argument('--use_ratio',      type=float, default=1.0)
+parser.add_argument('--use_ratio',      type=float, default=0.1)
+parser.add_argument('--train_ratio',    type=float, default=0.8)
 # model
 args = parser.parse_args()
 
@@ -55,13 +59,33 @@ def range_constraint(x):
     return tf.maximum(0.0, tf.minimum(x, 1.0))
 
 
+def load_data(data_name):
+    data_name = data_name.lower()
+    if data_name == 'logicsyn':
+        dataset = as_dataset(data_name, False)
+        dataset.load_data()
+        X_train = dataset.X_train
+        y_train = dataset.y_train
+        y_train = np.reshape(y_train, [-1])
+    elif data_name == 'ml1m':
+        dataset = as_dataset(data_name, True)
+        dataset.load_data()
+        X_train_raw = dataset.X_train
+        y_train = dataset.y_train
+        y_train = np.reshape(y_train, [-1])
+        X_train_raw = np.delete(X_train_raw, 2, axis=1)
+        X_train_raw[:, 2:] -= 3467
+        X_train_raw[:, 2:] += 28
+        X_train = np.zeros(shape=[X_train_raw.shape[0], np.max(X_train_raw)+1], dtype=np.int32)
+        for index in range(X_train.shape[0]):
+            X_train[index, X_train_raw[index]] = 1
+    else:
+        raise ValueError
+    return X_train, y_train
+
+
 def get_data(data_name, use_ratio, train_ratio):
-    dataset = as_dataset(data_name, True)
-    dataset.load_data(gen_type='train')
-    dataset.load_data(gen_type='test')
-    X_train = dataset.X_train
-    y_train = dataset.y_train
-    y_train = np.reshape(y_train, [-1])
+    X_train, y_train = load_data(data_name)
     tot_samples = X_train.shape[0]
     num_small_train = int(tot_samples * use_ratio * train_ratio)
     num_small_valid = int(tot_samples * use_ratio * (1.0 - train_ratio))
@@ -168,15 +192,20 @@ def get_trainable_variable_number():
     return total_number_parameters
 
 
-def train(layers, batch_size=32, eval_per_steps=30, max_rounds=50, use_ratio=0.4, lr=0.001):
-    #  read dataset
-    dataset = as_dataset('LogicSyn', False)
+def train(layers, batch_size=32, eval_per_steps=30, max_rounds=50, use_ratio=0.4, train_ratio=0.8, lr=0.001):
+    sess_config = tf.ConfigProto(allow_soft_placement=True, log_device_placement=False)
+    sess_config.gpu_options.allow_growth = True
+
+    #  load dataset
+    X_train, y_train, X_valid, y_valid = get_data('ml1m', use_ratio=use_ratio, train_ratio=train_ratio)
+
+    #  build graph
     graph = tf.Graph()
-    sess = tf.Session(graph=graph)
+    sess = tf.Session(graph=graph, config=sess_config)
     writer = tf.summary.FileWriter("statistics", graph=graph)
     with graph.as_default():
         learning_rate = tf.get_variable('lr', dtype=tf.float32, initializer=lr, trainable=False)
-        model = Model(dataset.num_fields, layers)
+        model = Model(X_train.shape[1], layers)
         opt = tf.train.AdamOptimizer(learning_rate=learning_rate)
         train_op = opt.minimize(model.loss)
         for var in tf.get_collection('NEGATORS'):
@@ -187,10 +216,8 @@ def train(layers, batch_size=32, eval_per_steps=30, max_rounds=50, use_ratio=0.4
             tf.summary.histogram(var.name, var)
         write_op = tf.summary.merge_all()
 
-    print("Number of trainable parameters: {}\n".format(get_trainable_variable_number()))
+        print("Number of trainable parameters: {}\n".format(get_trainable_variable_number()))
 
-    #  load dataset
-    X_train, y_train, X_valid, y_valid = get_data('LogicSyn', use_ratio=use_ratio, train_ratio=0.8)
 
     #  train information
     num_rounds = max_rounds
@@ -198,6 +225,7 @@ def train(layers, batch_size=32, eval_per_steps=30, max_rounds=50, use_ratio=0.4
     tot_steps = (tot_samples + batch_size - 1) // batch_size
     eval_per_steps = min(eval_per_steps, tot_steps)
     history = {'train_loss': [], 'train_acc': [], 'train_auc': [], 'valid_loss': [], 'valid_acc': [], 'valid_auc': []}
+
 
     with graph.as_default():
         sess.run(tf.global_variables_initializer())
@@ -216,7 +244,16 @@ def train(layers, batch_size=32, eval_per_steps=30, max_rounds=50, use_ratio=0.4
                 train_acc = (train_acc * step + np.count_nonzero(labels == preds) / batch_size) / (step + 1)
 
                 if (step + 1) % eval_per_steps == 0 or step + 1 == tot_steps or step == 0:
-                    val_pred_scores, val_loss = sess.run((model.pred_scores, model.loss), feed_dict={model.inputs: X_valid, model.labels: y_valid})
+                    val_pred_scores_list = []
+                    val_loss_list = []
+                    for i in range(X_valid.shape[0] // batch_size + 1):
+                        batch_X = X_valid[i * batch_size:(i+1)*batch_size]
+                        batch_y = y_valid[i * batch_size:(i+1)*batch_size]
+                        pred, loss = sess.run((model.pred_scores, model.loss), feed_dict={model.inputs: batch_X, model.labels: batch_y})
+                        val_pred_scores_list.append(pred)
+                        val_loss_list.append(loss)
+                    val_pred_scores = np.concatenate(val_pred_scores_list, axis=0)
+                    val_loss = np.vstack(val_loss_list)
                     val_labels = y_valid
                     val_preds = np.where(val_pred_scores >= 0.5, np.ones_like(val_pred_scores, dtype=np.int32), np.zeros_like(val_pred_scores, dtype=np.int32))
                     valid_loss = np.mean(val_loss)
@@ -263,6 +300,7 @@ history = train(layers=layers,
                 eval_per_steps=args.eval_per_steps,
                 max_rounds=args.max_rounds,
                 use_ratio=args.use_ratio,
+                train_ratio=args.train_ratio,
                 lr=args.lr)
 with open(args.run_name + '.json', 'w') as f:
     json.dump(history, f)
