@@ -4,9 +4,7 @@ import json
 import argparse
 import matplotlib.pyplot as plt
 from dataset import as_dataset
-
-import os
-os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+from utils import MyEncoder
 
 import tensorflow as tf
 import numpy as np
@@ -14,13 +12,13 @@ from sklearn.metrics import roc_auc_score
 
 parser = argparse.ArgumentParser(description='LNN')
 # environment
-parser.add_argument('--run_name',       type=str,   default='run_name')
+parser.add_argument('--run_name',       type=str,   default='default_run_name')
 parser.add_argument('--run_dir',        type=str,   default='experiments/')
 # train
 parser.add_argument('--batch_size',     type=int,   default=32)
 parser.add_argument('--eval_per_steps', type=int,   default=30)
 parser.add_argument('--max_rounds',     type=int,   default=100)
-parser.add_argument('--lr',             type=float, default=0.001)
+parser.add_argument('--lr',             type=float, default=0.0001)
 parser.add_argument('--patience',       type=int,   default=5)
 # data
 parser.add_argument('--use_ratio',      type=float, default=0.1)
@@ -192,7 +190,7 @@ def get_trainable_variable_number():
     return total_number_parameters
 
 
-def train(layers, batch_size=32, eval_per_steps=30, max_rounds=50, use_ratio=0.4, train_ratio=0.8, lr=0.001):
+def train(layers, batch_size=32, eval_per_steps=30, max_rounds=50, use_ratio=0.4, train_ratio=0.8, lr=0.001, tensorboard_dir='statistics'):
     sess_config = tf.ConfigProto(allow_soft_placement=True, log_device_placement=False)
     sess_config.gpu_options.allow_growth = True
 
@@ -202,7 +200,7 @@ def train(layers, batch_size=32, eval_per_steps=30, max_rounds=50, use_ratio=0.4
     #  build graph
     graph = tf.Graph()
     sess = tf.Session(graph=graph, config=sess_config)
-    writer = tf.summary.FileWriter("statistics", graph=graph)
+    writer = tf.summary.FileWriter(tensorboard_dir, graph=graph)
     with graph.as_default():
         learning_rate = tf.get_variable('lr', dtype=tf.float32, initializer=lr, trainable=False)
         model = Model(X_train.shape[1], layers)
@@ -267,32 +265,44 @@ def train(layers, batch_size=32, eval_per_steps=30, max_rounds=50, use_ratio=0.4
             history['valid_loss'].append(valid_loss)
             history['valid_acc'].append(valid_acc)
             history['valid_auc'].append(valid_auc)
+
+        negators, selectors = None, None
+        for var in tf.get_collection('NEGATORS'):
+            if var.name.find('layer_0') != -1:
+                negators = np.greater(sess.run(fetches=var), 0.5)
+        for var in tf.get_collection('SELECTORS'):
+            if var.name.find('layer_0') != -1:
+                selectors = np.greater(sess.run(fetches=var), 0.5)
+        for i in range(selectors.shape[1]):
+            for j in range(selectors.shape[0]):
+                if selectors[j][i]:
+                    print('%s%i' % ('-' if negators[j][i] else '', j + 1), end=' ')
+            print(' ')
+
     return history
 
 def plot_histories(histories, run_name):
     # Plot training & validation accuracy values
     legends = []
-    plt.title('LNN Auc')
+    plt.title(run_name.split('/')[-1])
     filename = run_name + '.png'
     for curve_name, points in histories.items():
         plt.plot(points)
         legends.append(curve_name)
     plt.ylabel('Auc')
     plt.xlabel('Epoch')
-    plt.legend(legends, loc='upper left')
+    plt.legend(legends, loc='center right')
     plt.savefig(filename, format='png')
     plt.show()
 
 #  construct layers
+width = 6
 layers = []
-layers.append(('logic', {'units': 100}))
-layers.append(('logic', {'units': 100}))
-layers.append(('dense', {'units': 100, 'activation': 'relu'}))
+layers.append(('logic', {'units': width}))
+layers.append(('logic', {'units': width}))
+# layers.append(('logic', {'units': 1}))
+layers.append(('dense', {'units': width, 'activation': 'relu'}))
 layers.append(('dense', {'units': 1, 'activation': 'sigmoid'}))
-#layers.append(('dense', {'units': 100, 'activation': 'relu'}))
-#layers.append(('dense', {'units': 100, 'activation': 'relu'}))
-#layers.append(('dense', {'units': 100, 'activation': 'relu'}))
-#layers.append(('dense', {'units': 1, 'activation': 'sigmoid'}))
 
 
 history = train(layers=layers,
@@ -301,7 +311,8 @@ history = train(layers=layers,
                 max_rounds=args.max_rounds,
                 use_ratio=args.use_ratio,
                 train_ratio=args.train_ratio,
-                lr=args.lr)
+                lr=args.lr,
+                tensorboard_dir=args.run_name)
 with open(args.run_name + '.json', 'w') as f:
-    json.dump(history, f)
+    json.dump(history, f, cls=MyEncoder)
 plot_histories(history,  args.run_name)
