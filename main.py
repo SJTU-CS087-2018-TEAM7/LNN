@@ -1,11 +1,34 @@
-import tensorflow as tf
-import numpy as np
-import matplotlib.pyplot as plt
-from sklearn.metrics import roc_auc_score
-from dataset import as_dataset
 import time
 import sys
+import json
+import argparse
+import matplotlib.pyplot as plt
+from dataset import as_dataset
 
+import tensorflow as tf
+import numpy as np
+from sklearn.metrics import roc_auc_score
+
+parser = argparse.ArgumentParser(description='LNN')
+# environment
+parser.add_argument('--run_name',       type=str)
+parser.add_argument('--run_dir',        type=str,   default='experiments/')
+# train
+parser.add_argument('--batch_size',     type=int,   default=32)
+parser.add_argument('--eval_per_steps', type=int,   default=30)
+parser.add_argument('--max_rounds',     type=int,   default=100)
+parser.add_argument('--lr',             type=float, default=0.001)
+parser.add_argument('--patience',       type=int,   default=5)
+# data
+parser.add_argument('--use_ratio',      type=float, default=1.0)
+# model
+args = parser.parse_args()
+
+args.run_name = args.run_dir + args.run_name
+with open(args.run_name + '.args', 'w') as f:
+    f.write(str(args))
+
+#################################################################
 
 def get_actionvation(activation):
     if activation == 'relu':
@@ -198,6 +221,7 @@ def train(layers, batch_size=32, eval_per_steps=30, max_rounds=50, use_ratio=0.4
                     valid_acc = np.count_nonzero(val_labels == val_preds) / X_valid.shape[0]
                     valid_auc = auc_score(val_labels, val_logits)
                 print_line(round, min((step + 1) * batch_size, tot_samples), tot_samples, start_time, train_loss, train_acc, train_auc, valid_loss, valid_acc, valid_auc)
+
             history['train_loss'].append(train_loss)
             history['train_acc'].append(train_acc)
             history['train_auc'].append(train_auc)
@@ -206,12 +230,11 @@ def train(layers, batch_size=32, eval_per_steps=30, max_rounds=50, use_ratio=0.4
             history['valid_auc'].append(valid_auc)
     return history
 
-
-def plot_histories(histories, info):
+def plot_histories(histories, run_name):
     # Plot training & validation accuracy values
     legends = []
-    plt.title('LNN Auc' + '(' + info + ')')
-    filename = "figures/figure(" + info + ').png'
+    plt.title('LNN Auc')
+    filename = run_name + '.png'
     for curve_name, points in histories.items():
         plt.plot(points)
         legends.append(curve_name)
@@ -229,15 +252,14 @@ layers.append(('logic', {'units': 300}))
 #layers.append(('dense', {'units': 100, 'activation': 'relu'}))
 layers.append(('dense', {'units': 300, 'activation': 'relu'}))
 layers.append(('dense', {'units': 1, 'activation': None}))
-batch_size = 32
-eval_per_steps = 30
-max_rounds = 100
-use_ratio = 1.0
-lr = 0.001
-
-history = train(layers=layers, batch_size=batch_size, eval_per_steps=eval_per_steps, max_rounds=max_rounds, use_ratio=use_ratio, lr=lr)
-print(history)
-plot_histories(history, 'batch_size={}_evalsteps={}_rounds={}_useratio={}'.format(batch_size, eval_per_steps, max_rounds, use_ratio))
 
 
-
+history = train(layers=layers,
+                batch_size=args.batch_size,
+                eval_per_steps=args.eval_per_steps,
+                max_rounds=args.max_rounds,
+                use_ratio=args.use_ratio,
+                lr=args.lr)
+with open(args.run_name + '.json', 'w') as f:
+    json.dump(history, f)
+plot_histories(history,  args.run_name)

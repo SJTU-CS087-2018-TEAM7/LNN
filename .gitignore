@@ -1,0 +1,10 @@
+*.pyc
+**/__pychache__/
+
+experiments/
+
+dataset/LogicSyn/feature/
+dataset/LogicSyn/hdf/
+dataset/LogicSyn/raw/
+dataset/LogicSyn/meta.txt
+dataset/LogicSyn/rule.txt
