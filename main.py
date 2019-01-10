@@ -11,7 +11,7 @@ from sklearn.metrics import roc_auc_score
 
 parser = argparse.ArgumentParser(description='LNN')
 # environment
-parser.add_argument('--run_name',       type=str)
+parser.add_argument('--run_name',       type=str,   default='run_name')
 parser.add_argument('--run_dir',        type=str,   default='experiments/')
 # train
 parser.add_argument('--batch_size',     type=int,   default=32)
@@ -35,6 +35,8 @@ def get_actionvation(activation):
         return tf.nn.relu
     elif activation == 'softmax':
         return tf.nn.softmax
+    elif activation == 'sigmoid':
+        return tf.nn.sigmoid
     elif activation is None:
         return None
     else:
@@ -88,7 +90,7 @@ def auc_score(y_true, y_score):
 
 
 class Model:
-    def __init__(self, input_dim, layers, lambda_negate=0.001, lambda_selector=0.001, lambda_propositions=0.001, lambda_weights=0.001):
+    def __init__(self, input_dim, layers, lambda_negate=0.0, lambda_selector=0.0, lambda_propositions=0.0, lambda_weights=0.0):
         #  tensers_sets contains the set of some kind of tensors
         self.tensers_sets = dict()
         self.tensers_sets['propositions'] = []
@@ -105,7 +107,7 @@ class Model:
                     cur_layer = self.dense_layer(cur_layer, **layer_params)
                 else:
                     raise ValueError
-        self.logits = tf.reshape(cur_layer, [-1])  #  batch
+        self.pred_scores = tf.reshape(cur_layer, [-1])  #  batch
 
         #  define loss
         self.labels = tf.placeholder(dtype=tf.float32, shape=[None], name='labels')
@@ -119,7 +121,7 @@ class Model:
         self.weights_regu = lambda_weights * tf.add_n(weights_regu_list) if len(weights_regu_list) != 0 else 0.0
         self.regu_loss = self.negators_regu + self.selectors_regu + self.propositions_regu + self.weights_regu
 
-        self.loss = tf.nn.sigmoid_cross_entropy_with_logits(labels=self.labels, logits=self.logits) + self.regu_loss
+        self.loss = tf.losses.log_loss(labels=self.labels, predictions=self.pred_scores) + self.regu_loss
 
     def logic_layer(self, input, units):  # input:  batch * input_dim
         input_dim = input.shape.as_list()[-1]
@@ -207,19 +209,19 @@ def train(layers, batch_size=32, eval_per_steps=30, max_rounds=50, use_ratio=0.4
             for step in range(tot_steps):
                 inputs = X_train[step * batch_size: (step + 1) * batch_size]
                 labels = y_train[step * batch_size: (step + 1) * batch_size]
-                _, logits, loss = sess.run((train_op, model.logits, model.loss), feed_dict={model.inputs: inputs, model.labels: labels})
-                preds = np.where(logits > 0, np.ones_like(logits, dtype=np.int32), np.zeros_like(logits, dtype=np.int32))
+                _, pred_scores, loss = sess.run((train_op, model.pred_scores, model.loss), feed_dict={model.inputs: inputs, model.labels: labels})
+                preds = np.where(pred_scores >= 0.5, np.ones_like(pred_scores, dtype=np.int32), np.zeros_like(pred_scores, dtype=np.int32))
                 train_loss = (train_loss * step + np.mean(loss)) / (step + 1)
-                train_auc = (train_auc * step + auc_score(labels, logits)) / (step + 1)
+                train_auc = (train_auc * step + auc_score(labels, pred_scores)) / (step + 1)
                 train_acc = (train_acc * step + np.count_nonzero(labels == preds) / batch_size) / (step + 1)
 
                 if (step + 1) % eval_per_steps == 0 or step + 1 == tot_steps or step == 0:
-                    val_logits, val_loss = sess.run((model.logits, model.loss), feed_dict={model.inputs: X_valid, model.labels: y_valid})
+                    val_pred_scores, val_loss = sess.run((model.pred_scores, model.loss), feed_dict={model.inputs: X_valid, model.labels: y_valid})
                     val_labels = y_valid
-                    val_preds = np.where(val_logits > 0, np.ones_like(val_logits, dtype=np.int32), np.zeros_like(val_logits, dtype=np.int32))
+                    val_preds = np.where(val_pred_scores >= 0.5, np.ones_like(val_pred_scores, dtype=np.int32), np.zeros_like(val_pred_scores, dtype=np.int32))
                     valid_loss = np.mean(val_loss)
                     valid_acc = np.count_nonzero(val_labels == val_preds) / X_valid.shape[0]
-                    valid_auc = auc_score(val_labels, val_logits)
+                    valid_auc = auc_score(val_labels, val_pred_scores)
                 print_line(round, min((step + 1) * batch_size, tot_samples), tot_samples, start_time, train_loss, train_acc, train_auc, valid_loss, valid_acc, valid_auc)
 
             history['train_loss'].append(train_loss)
@@ -246,12 +248,14 @@ def plot_histories(histories, run_name):
 
 #  construct layers
 layers = []
-layers.append(('logic', {'units': 300}))
-layers.append(('logic', {'units': 300}))
+layers.append(('logic', {'units': 100}))
+layers.append(('logic', {'units': 100}))
+layers.append(('dense', {'units': 100, 'activation': 'relu'}))
+layers.append(('dense', {'units': 1, 'activation': 'sigmoid'}))
 #layers.append(('dense', {'units': 100, 'activation': 'relu'}))
 #layers.append(('dense', {'units': 100, 'activation': 'relu'}))
-layers.append(('dense', {'units': 300, 'activation': 'relu'}))
-layers.append(('dense', {'units': 1, 'activation': None}))
+#layers.append(('dense', {'units': 100, 'activation': 'relu'}))
+#layers.append(('dense', {'units': 1, 'activation': 'sigmoid'}))
 
 
 history = train(layers=layers,
