@@ -12,17 +12,18 @@ from sklearn.metrics import roc_auc_score
 
 parser = argparse.ArgumentParser(description='LNN')
 # environment
-parser.add_argument('--run_name',       type=str,   default='default_run_name')
+parser.add_argument('--run_name',       type=str)
 parser.add_argument('--run_dir',        type=str,   default='experiments/')
 # train
 parser.add_argument('--batch_size',     type=int,   default=32)
-parser.add_argument('--eval_per_steps', type=int,   default=30)
+parser.add_argument('--eval_per_steps', type=int,   default=1000)
 parser.add_argument('--max_rounds',     type=int,   default=100)
-parser.add_argument('--lr',             type=float, default=0.0001)
+parser.add_argument('--lr',             type=float, default=0.001)
+parser.add_argument('--keep_prob',      type=float, default=0.9)
 parser.add_argument('--patience',       type=int,   default=5)
 # data
-parser.add_argument('--use_ratio',      type=float, default=0.1)
-parser.add_argument('--train_ratio',    type=float, default=0.8)
+parser.add_argument('--use_ratio',      type=float, default=0.25)
+parser.add_argument('--train_ratio',    type=float, default=0.9)
 # model
 args = parser.parse_args()
 
@@ -50,11 +51,24 @@ def logic_regulation(x):
 
 
 def weight_regulation(x):
-    return tf.nn.l2_loss(x)
+    return tf.contrib.layers.l1_regularizer(1.0)(x)
 
 
 def range_constraint(x):
     return tf.maximum(0.0, tf.minimum(x, 1.0))
+
+
+def disjuction_op(x):
+    op_type = "upper_mean"
+    if op_type == "upper_mean":
+        thresh_hold = 0.8
+        max_value = tf.stop_gradient(tf.reduce_max(x, axis=1, keepdims=True))
+        min_value = tf.stop_gradient(tf.reduce_min(x, axis=1, keepdims=True))
+        mid_value = min_value + (max_value - min_value) * thresh_hold
+        masked = tf.where(x >= mid_value, x, tf.zeros_like(x))
+        return tf.reduce_mean(masked, axis=1)
+    else:
+        raise ValueError
 
 
 def load_data(data_name):
@@ -91,6 +105,8 @@ def get_data(data_name, use_ratio, train_ratio):
     y_small_train = y_train[:num_small_train]
     X_small_valid = X_train[num_small_train:num_small_train + num_small_valid]
     y_small_valid = y_train[num_small_train:num_small_train + num_small_valid]
+    print("Number of train set: {}".format(num_small_train))
+    print("Number of valid set: {}".format(num_small_valid))
     return X_small_train, y_small_train, X_small_valid, y_small_valid
 
 
@@ -118,6 +134,7 @@ class Model:
         self.tensers_sets['propositions'] = []
 
         #  define forwarding phase
+        self.keep_prob = tf.placeholder(dtype=tf.float32, shape=[], name='keep_prob')
         self.inputs = tf.placeholder(dtype=tf.int32, shape=[None, input_dim], name="inputs")  # batch * input_dim
         cur_layer = tf.cast(self.inputs, dtype=tf.float32)
         for i in range(len(layers)):
@@ -146,6 +163,7 @@ class Model:
         self.loss = tf.losses.log_loss(labels=self.labels, predictions=self.pred_scores) + self.regu_loss
 
     def logic_layer(self, input, units):  # input:  batch * input_dim
+        print(input.shape)
         input_dim = input.shape.as_list()[-1]
         negator = tf.get_variable('negator', shape=[input_dim, units], dtype=tf.float32,
                                   initializer=tf.initializers.random_normal(mean=0.5, stddev=0.5),
@@ -160,7 +178,7 @@ class Model:
         selector = tf.reshape(selector, [1, input_dim, units])
         after_negate = negator * (1.0 - input) + (1.0 - negator) * input
         after_select = after_negate * selector
-        after_disjunct = tf.reduce_max(after_select, axis=1)
+        after_disjunct = disjuction_op(after_select)
         self.tensers_sets['propositions'].append(after_disjunct)
         return after_disjunct
 
@@ -173,10 +191,12 @@ class Model:
                                initializer=tf.initializers.constant(0.0), trainable=True, collections=['BIAS', tf.GraphKeys.GLOBAL_VARIABLES])
         act = get_actionvation(activation)
         input = tf.reshape(input, shape=[-1, input_dim])
+        inter = tf.matmul(input, weights) + bias
+        inter = tf.nn.dropout(inter, self.keep_prob)
         if act is not None:
-            output = act(tf.matmul(input, weights) + bias)
+            output = act(inter)
         else:
-            output = tf.matmul(input, weights) + bias
+            output = inter
         return output
 
 
@@ -190,7 +210,7 @@ def get_trainable_variable_number():
     return total_number_parameters
 
 
-def train(layers, batch_size=32, eval_per_steps=30, max_rounds=50, use_ratio=0.4, train_ratio=0.8, lr=0.001, tensorboard_dir='statistics'):
+def train(layers, batch_size=32, eval_per_steps=30, max_rounds=50, use_ratio=0.4, train_ratio=0.8, lr=0.001, keep_prob=0.8, tensorboard_dir='statistics', **model_params):
     sess_config = tf.ConfigProto(allow_soft_placement=True, log_device_placement=False)
     sess_config.gpu_options.allow_growth = True
 
@@ -203,7 +223,7 @@ def train(layers, batch_size=32, eval_per_steps=30, max_rounds=50, use_ratio=0.4
     writer = tf.summary.FileWriter(tensorboard_dir, graph=graph)
     with graph.as_default():
         learning_rate = tf.get_variable('lr', dtype=tf.float32, initializer=lr, trainable=False)
-        model = Model(X_train.shape[1], layers)
+        model = Model(X_train.shape[1], layers, **model_params)
         opt = tf.train.AdamOptimizer(learning_rate=learning_rate)
         train_op = opt.minimize(model.loss)
         for var in tf.get_collection('NEGATORS'):
@@ -235,7 +255,7 @@ def train(layers, batch_size=32, eval_per_steps=30, max_rounds=50, use_ratio=0.4
             for step in range(tot_steps):
                 inputs = X_train[step * batch_size: (step + 1) * batch_size]
                 labels = y_train[step * batch_size: (step + 1) * batch_size]
-                _, pred_scores, loss = sess.run((train_op, model.pred_scores, model.loss), feed_dict={model.inputs: inputs, model.labels: labels})
+                _, pred_scores, loss = sess.run((train_op, model.pred_scores, model.loss), feed_dict={model.inputs: inputs, model.labels: labels, model.keep_prob: keep_prob})
                 preds = np.where(pred_scores >= 0.5, np.ones_like(pred_scores, dtype=np.int32), np.zeros_like(pred_scores, dtype=np.int32))
                 train_loss = (train_loss * step + np.mean(loss)) / (step + 1)
                 train_auc = (train_auc * step + auc_score(labels, pred_scores)) / (step + 1)
@@ -247,7 +267,7 @@ def train(layers, batch_size=32, eval_per_steps=30, max_rounds=50, use_ratio=0.4
                     for i in range(X_valid.shape[0] // batch_size + 1):
                         batch_X = X_valid[i * batch_size:(i+1)*batch_size]
                         batch_y = y_valid[i * batch_size:(i+1)*batch_size]
-                        pred, loss = sess.run((model.pred_scores, model.loss), feed_dict={model.inputs: batch_X, model.labels: batch_y})
+                        pred, loss = sess.run((model.pred_scores, model.loss), feed_dict={model.inputs: batch_X, model.labels: batch_y, model.keep_prob:1.0})
                         val_pred_scores_list.append(pred)
                         val_loss_list.append(loss)
                     val_pred_scores = np.concatenate(val_pred_scores_list, axis=0)
@@ -273,34 +293,42 @@ def train(layers, batch_size=32, eval_per_steps=30, max_rounds=50, use_ratio=0.4
         for var in tf.get_collection('SELECTORS'):
             if var.name.find('layer_0') != -1:
                 selectors = np.greater(sess.run(fetches=var), 0.5)
-        for i in range(selectors.shape[1]):
-            for j in range(selectors.shape[0]):
-                if selectors[j][i]:
-                    print('%s%i' % ('-' if negators[j][i] else '', j + 1), end=' ')
-            print(' ')
+#        for i in range(selectors.shape[1]):
+#            for j in range(selectors.shape[0]):
+#                if selectors[j][i]:
+#                    print('%s%i' % ('-' if negators[j][i] else '', j + 1), end=' ')
+#            print(' ')
 
     return history
 
 def plot_histories(histories, run_name):
     # Plot training & validation accuracy values
-    legends = []
     plt.title(run_name.split('/')[-1])
     filename = run_name + '.png'
-    for curve_name, points in histories.items():
-        plt.plot(points)
-        legends.append(curve_name)
-    plt.ylabel('Auc')
-    plt.xlabel('Epoch')
-    plt.legend(legends, loc='center right')
+    subplots = [(['loss'], (1, 2, 1)), (['auc', 'acc'], (1, 2, 2))]
+    for subplot in subplots:
+        plt.subplot(*subplot[1])
+        legends = []
+        for curve_name, points in histories.items():
+            for key_name in subplot[0]:
+                if curve_name.find(key_name) != -1:
+                    plt.plot(points)
+                    legends.append(curve_name)
+                    plt.ylabel(','.join(subplot[0]))
+                    plt.xlabel('Epoch')
+                    break
+        plt.legend(legends, loc='best')
     plt.savefig(filename, format='png')
     plt.show()
 
 #  construct layers
-width = 6
+width = 100
 layers = []
 layers.append(('logic', {'units': width}))
 layers.append(('logic', {'units': width}))
 # layers.append(('logic', {'units': 1}))
+#layers.append(('dense', {'units': width, 'activation': 'relu'}))
+#layers.append(('dense', {'units': width, 'activation': 'relu'}))
 layers.append(('dense', {'units': width, 'activation': 'relu'}))
 layers.append(('dense', {'units': 1, 'activation': 'sigmoid'}))
 
@@ -312,7 +340,9 @@ history = train(layers=layers,
                 use_ratio=args.use_ratio,
                 train_ratio=args.train_ratio,
                 lr=args.lr,
-                tensorboard_dir=args.run_name)
-with open(args.run_name + '.json', 'w') as f:
-    json.dump(history, f, cls=MyEncoder)
+                keep_prob=args.keep_prob,
+                tensorboard_dir=args.run_name,
+                lambda_weights=0.0001)
+#with open(args.run_name + '.json', 'w') as f:
+#    json.dump(history, f, cls=MyEncoder)
 plot_histories(history,  args.run_name)
